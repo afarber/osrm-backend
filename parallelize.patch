@@ -1,0 +1,133 @@
+diff --git a/scripts/ci/run_benchmarks.sh b/scripts/ci/run_benchmarks.sh
+index 00e28b649..8e0e6c27c 100755
+--- a/scripts/ci/run_benchmarks.sh
++++ b/scripts/ci/run_benchmarks.sh
+@@ -83,7 +83,9 @@ function run_benchmarks_for_folder {
+     measure_peak_ram_and_time "$BINARIES_FOLDER/osrm-contract $FOLDER/data.osrm" "$RESULTS_FOLDER/osrm_contract.bench"
+ 
+ 
+-    for ALGORITHM in ch mld; do
++    # Run node benchmarks for CH and MLD in parallel
++    run_node_benchmarks() {
++        local ALGORITHM=$1
+         for BENCH in nearest table trip route match; do
+             echo "Running node $BENCH $ALGORITHM"
+             START=$(date +%s.%N)
+@@ -92,9 +94,17 @@ function run_benchmarks_for_folder {
+             DIFF=$(echo "$END - $START" | bc)
+             echo "Took: ${DIFF}s"
+         done
+-    done
++    }
+ 
+-    for ALGORITHM in ch mld; do
++    run_node_benchmarks ch &
++    NODE_CH_PID=$!
++    run_node_benchmarks mld &
++    NODE_MLD_PID=$!
++    wait $NODE_CH_PID $NODE_MLD_PID
++
++    # Run random benchmarks for CH and MLD in parallel
++    run_random_benchmarks() {
++        local ALGORITHM=$1
+         for BENCH in nearest table trip route match; do
+             echo "Running random $BENCH $ALGORITHM"
+             START=$(date +%s.%N)
+@@ -103,31 +113,45 @@ function run_benchmarks_for_folder {
+             DIFF=$(echo "$END - $START" | bc)
+             echo "Took: ${DIFF}s"
+         done
+-    done
+-
+-
+-    for ALGORITHM in ch mld; do
+-        $BINARIES_FOLDER/osrm-routed --algorithm $ALGORITHM $FOLDER/data.osrm > /dev/null 2>&1 &
++    }
++
++    run_random_benchmarks ch &
++    RANDOM_CH_PID=$!
++    run_random_benchmarks mld &
++    RANDOM_MLD_PID=$!
++    wait $RANDOM_CH_PID $RANDOM_MLD_PID
++
++    # Run E2E benchmarks for CH and MLD in parallel (using different ports)
++    run_e2e_benchmarks() {
++        local ALGORITHM=$1
++        local PORT=$2
++        $BINARIES_FOLDER/osrm-routed --algorithm $ALGORITHM --port $PORT $FOLDER/data.osrm > /dev/null 2>&1 &
+         OSRM_ROUTED_PID=$!
+ 
+         # wait for osrm-routed to start
+-        if ! curl --retry-delay 3 --retry 10 --retry-all-errors "http://127.0.0.1:5000/route/v1/driving/13.388860,52.517037;13.385983,52.496891?steps=true" > /dev/null 2>&1; then
+-            echo "osrm-routed failed to start for algorithm $ALGORITHM"
++        if ! curl --retry-delay 3 --retry 10 --retry-all-errors "http://127.0.0.1:${PORT}/route/v1/driving/13.388860,52.517037;13.385983,52.496891?steps=true" > /dev/null 2>&1; then
++            echo "osrm-routed failed to start for algorithm $ALGORITHM on port $PORT"
+             kill -9 $OSRM_ROUTED_PID
+-            continue
++            return 1
+         fi
+ 
+         for METHOD in route nearest trip table match; do
+             echo "Running e2e benchmark for $METHOD $ALGORITHM"
+             START=$(date +%s.%N)
+-            python3 $SCRIPTS_FOLDER/scripts/ci/e2e_benchmark.py --host http://localhost:5000 --method $METHOD --iterations 5 --num_requests 1000 --gps_traces_file_path $GPS_TRACES > $RESULTS_FOLDER/e2e_${METHOD}_${ALGORITHM}.bench
++            python3 $SCRIPTS_FOLDER/scripts/ci/e2e_benchmark.py --host http://localhost:${PORT} --method $METHOD --iterations 5 --num_requests 1000 --gps_traces_file_path $GPS_TRACES > $RESULTS_FOLDER/e2e_${METHOD}_${ALGORITHM}.bench
+             END=$(date +%s.%N)
+             DIFF=$(echo "$END - $START" | bc)
+             echo "Took: ${DIFF}s"
+         done
+ 
+         kill -9 $OSRM_ROUTED_PID
+-    done
++    }
++
++    run_e2e_benchmarks ch 5000 &
++    E2E_CH_PID=$!
++    run_e2e_benchmarks mld 5001 &
++    E2E_MLD_PID=$!
++    wait $E2E_CH_PID $E2E_MLD_PID
+ }
+ 
+ run_benchmarks_for_folder
+diff --git a/scripts/cucumber_test_matrix.sh b/scripts/cucumber_test_matrix.sh
+index 2738068f3..a6aa93e08 100755
+--- a/scripts/cucumber_test_matrix.sh
++++ b/scripts/cucumber_test_matrix.sh
+@@ -5,14 +5,31 @@ set -o pipefail
+ set -o nounset
+ 
+ loadmethods=(datastore mmap directly)
+-profiles=(ch mld)
+ 
+-for profile in "${profiles[@]}"
+-do
+-  for loadmethod in "${loadmethods[@]}"
+-  do
++# Run all load methods for a given profile
++run_profile() {
++  local profile=$1
++  for loadmethod in "${loadmethods[@]}"; do
+     set -x
+     OSRM_LOAD_METHOD=$loadmethod npx cucumber-js features/ -p $profile
+     { set +x; } 2>/dev/null
+   done
+-done
++}
++
++# Run CH and MLD profiles in parallel
++run_profile ch &
++CH_PID=$!
++run_profile mld &
++MLD_PID=$!
++
++# Wait for both and capture exit codes
++wait $CH_PID
++CH_EXIT=$?
++wait $MLD_PID
++MLD_EXIT=$?
++
++# Exit with failure if either failed
++if [ $CH_EXIT -ne 0 ] || [ $MLD_EXIT -ne 0 ]; then
++  echo "Test failures: CH exit=$CH_EXIT, MLD exit=$MLD_EXIT"
++  exit 1
++fi

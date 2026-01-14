@@ -41,7 +41,7 @@ change multiple configuration items with just one commandline argument.  If you 
 more than one profile they are all merged into one configuration.
 
 Note: Cucumber profiles should not be confused with OSRM profiles.  Cucumber profiles
-are defined in `cucumber.mjs`.  OSRM profiles reside in the `profiles/*.lua` files.
+are defined in `cucumber.js`.  OSRM profiles reside in the `profiles/*.lua` files.
 
 Our implementation offers following stock profiles. You should always use one base
 profile followed by zero or more additional profiles.
@@ -91,8 +91,8 @@ $ rm -rf test/cache
 
 ## Configuration
 
-The whole configuration is done in `cucumber.mjs`. You can either edit `worldParameters`
-in `cucumber.mjs` or use environemnt variables to override single defaults.
+The whole configuration is done in `cucumber.js`. You can either edit `worldParameters`
+in `cucumber.js` or use environemnt variables to override single defaults.
 
 | worldParameters | Environment Variable     | Defaults to  |                         |
 | --------------- | ------------------------ | ------------ | ----------------------- |
